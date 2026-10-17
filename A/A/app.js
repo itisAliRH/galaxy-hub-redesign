@@ -4,9 +4,7 @@
 (function () {
   'use strict';
 
-  var KEY_HOME = 'hub-proto-home-region';
   var KEY_LAST = 'hub-proto-last-context';
-  var REGIONS = { freiburg: { name: 'Galaxy Freiburg', href: 'freiburg.html' } };
   var body = document.body;
   var ctx = { id: body.dataset.ctx, kind: body.dataset.ctxKind, name: body.dataset.ctxName };
   var params = new URLSearchParams(location.search);
@@ -70,10 +68,6 @@
   var embed = params.get('embed') === '1';
   if (embed) body.classList.add('is-embed');
 
-  var home = get('local', KEY_HOME) || params.get('home');
-  if (ctx.kind === 'region') { home = ctx.id; set('local', KEY_HOME, home); }
-  if (home && !REGIONS[home]) home = null;
-
   var lastRaw = get('session', KEY_LAST) || params.get('from');
   var last = null;
   if (lastRaw) { var p = lastRaw.split('|'); last = { id: p[0], kind: p[1], name: p[2] }; }
@@ -85,25 +79,6 @@
     live.textContent = '';
     window.setTimeout(function () { live.textContent = msg; }, 60);
   }
-
-  function applyHome() {
-    $$('[data-region-group]').forEach(function (g) {
-      var id = g.getAttribute('data-region-group');
-      g.hidden = !(home === id || ctx.id === id);
-    });
-    var name = home ? REGIONS[home].name : '';
-    $$('[data-back]').forEach(function (a) {
-      var show = !!home && ctx.id !== home && !embed;
-      a.hidden = !show;
-      if (show) a.setAttribute('href', REGIONS[home].href);
-    });
-    $$('[data-home-name]').forEach(function (n) { n.textContent = name; });
-    var foot = $('[data-home-foot]');
-    if (foot) foot.hidden = !home;
-    $$('[data-home-badge]').forEach(function (b) { b.hidden = b.getAttribute('data-home-badge') !== home; });
-    $$('[data-home-only]').forEach(function (n) { n.hidden = !home; });
-  }
-  applyHome();
 
   /* context change: highlight + announce */
   if (last && last.id !== ctx.id) {
@@ -125,7 +100,6 @@
     var a = ev.target.closest && ev.target.closest('a[href$=".html"], a[href*=".html?"], a[href*=".html#"]');
     if (!a || a.target === '_blank') return;
     var url = new URL(a.getAttribute('href'), location.href);
-    if (home) url.searchParams.set('home', home);
     url.searchParams.set('from', ctx.id + '|' + ctx.kind + '|' + ctx.name);
     if (embed) url.searchParams.set('embed', '1');
     a.setAttribute('href', url.pathname.split('/').pop() + url.search + url.hash);
@@ -198,7 +172,7 @@
       btn.setAttribute('aria-expanded', 'true');
       document.addEventListener('pointerdown', outside, true);
       if (focusItem !== false) {
-        var cur = $('[aria-current="true"]', menu) || $('[data-region="' + home + '"]', menu) || items()[0];
+        var cur = $('[aria-current="true"]', menu) || items()[0];
         if (cur) cur.focus();
       }
     }
@@ -224,15 +198,6 @@
     menu.addEventListener('focusout', function (ev) {
       var to = ev.relatedTarget;
       if (to && !menu.contains(to) && to !== btn) close(false);
-    });
-    var forget = $('[data-forget-home]', menu);
-    if (forget) forget.addEventListener('click', function () {
-      set('local', KEY_HOME, null);
-      home = null;
-      applyHome();
-      announce('Home region cleared');
-      btn.focus();
-      close(false);
     });
     return { open: open, close: close, isOpen: function () { return !menu.hidden; } };
   })();
@@ -323,6 +288,32 @@
     });
   }
 
+  /* ---------------------------------------- Ctrl K / Cmd K: search -- */
+  /* Focuses the sidebar search (or opens the mobile search row). Skipped while
+     typing in a field so the browser and the field keep the keys. */
+  var isMac = false;
+  try { isMac = /mac|iphone|ipad|ipod/i.test((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || ''); } catch (e) { isMac = false; }
+  $$('[data-kbd]').forEach(function (k) { k.textContent = isMac ? '\u2318K' : 'Ctrl K'; });
+  function editable(t) {
+    if (!t || t === body) return false;
+    if (t.isContentEditable) return true;
+    var tag = t.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+  }
+  document.addEventListener('keydown', function (ev) {
+    if (!(ev.metaKey || ev.ctrlKey) || ev.altKey || ev.shiftKey) return;
+    if (String(ev.key || '').toLowerCase() !== 'k') return;
+    if (editable(ev.target)) return;
+    var sb = $('#q-sb');
+    if (sb && sb.offsetParent !== null && getComputedStyle(sb).visibility !== 'hidden') {
+      ev.preventDefault(); sb.focus(); sb.select(); return;
+    }
+    if (msToggle && msForm && msToggle.offsetParent !== null) {
+      ev.preventDefault();
+      if (msForm.hidden) msToggle.click(); else $('input', msForm).focus();
+    }
+  });
+
   /* ------------------------------------------------ nav disclosures -- */
   $$('.nav-sec__btn').forEach(function (b) {
     b.addEventListener('click', function () {
@@ -400,6 +391,25 @@
     window.addEventListener('resize', spy);
     spy();
   }
+
+  /* ------------------------------------------- Rows / Tiles toggle --- */
+  /* One markup per list; the button group sets data-view on its scope and each
+     list remembers its choice in localStorage "hub-proto-view.<list id>". */
+  var KEY_VIEW = 'hub-proto-view.';
+  $$('[data-viewtoggle]').forEach(function (group) {
+    var id = group.getAttribute('data-viewtoggle');
+    var scope = document.getElementById(id);
+    if (!scope) return;
+    var btns = $$('button[data-view]', group);
+    function setView(v, save) {
+      scope.setAttribute('data-view', v);
+      btns.forEach(function (b) { b.setAttribute('aria-pressed', String(b.getAttribute('data-view') === v)); });
+      if (save) set('local', KEY_VIEW + id, v);
+    }
+    var saved = get('local', KEY_VIEW + id);
+    setView(saved === 'rows' || saved === 'tiles' ? saved : (scope.getAttribute('data-view') === 'tiles' ? 'tiles' : 'rows'), false);
+    btns.forEach(function (b) { b.addEventListener('click', function () { setView(b.getAttribute('data-view'), true); }); });
+  });
 
   /* -------------------------------------------------------- filters --- */
   function fmt(n) { return n.toLocaleString('en-US'); }
